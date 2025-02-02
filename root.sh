@@ -43,6 +43,11 @@ case $install_ubuntu in
     # Download and extract Ubuntu base tarball
     curl -o /tmp/rootfs.tar.gz "http://cdimage.ubuntu.com/ubuntu-base/releases/20.04/release/ubuntu-base-20.04.4-base-${ARCH_ALT}.tar.gz"
     tar -xf /tmp/rootfs.tar.gz -C "$ROOTFS_DIR"
+    
+    # Avoid permission issues by creating necessary directories
+    mkdir -p "$ROOTFS_DIR/var/lib/apt/lists/partial"
+    mkdir -p "$ROOTFS_DIR/tmp"
+    chmod 1777 "$ROOTFS_DIR/tmp"
     ;;
   *)
     echo "Skipping Ubuntu installation."
@@ -60,7 +65,7 @@ chmod 755 "$ROOTFS_DIR/usr/local/bin/proot"
 printf "nameserver 1.1.1.1\nnameserver 1.0.0.1" > "$ROOTFS_DIR/etc/resolv.conf"
 
 # Clean up temporary files
-rm -rf /tmp/rootfs.tar.gz /tmp/sbin
+rm -rf /tmp/rootfs.tar.gz
 
 # Mark as installed
 touch "$ROOTFS_DIR/.installed"
@@ -81,7 +86,13 @@ display_gg() {
 clear
 display_gg
 
-# Start proot
+# Start proot with fake root privileges
 "$ROOTFS_DIR/usr/local/bin/proot" \
   --rootfs="$ROOTFS_DIR" \
-  -0 -w "/root" -b /dev -b /sys -b /proc -b /etc/resolv.conf --kill-on-exit
+  -0 -w "/root" \
+  -b /dev \
+  -b /sys \
+  -b /proc \
+  -b /etc/resolv.conf \
+  --kill-on-exit \
+  /bin/bash -c "apt-get update && apt-get install -y --no-install-recommends bash coreutils && bash"
