@@ -1,98 +1,113 @@
 #!/bin/sh
 
-# Define root directory
-ROOTFS_DIR=$(pwd)/rootfs
-export PATH=$PATH:$HOME/.local/bin
-
-# Constants
+# Variables globales
+ROOTFS_DIR=$(pwd)
+export PATH=$PATH:~/.local/usr/bin
 MAX_RETRIES=50
 TIMEOUT=1
 ARCH=$(uname -m)
+INSTALL_MARKER="$ROOTFS_DIR/.installed"
 
-# Determine alternative architecture name
-case $ARCH in
-  x86_64) ARCH_ALT=amd64 ;;
-  aarch64) ARCH_ALT=arm64 ;;
-  *)
-    printf "Unsupported CPU architecture: %s\n" "$ARCH"
+# Detectar arquitectura
+case "$ARCH" in
+  x86_64) ARCH_ALT="amd64" ;;
+  aarch64) ARCH_ALT="arm64" ;;
+  *) 
+    echo "Unsupported CPU architecture: ${ARCH}"
     exit 1
     ;;
 esac
 
-# Create rootfs directory if it doesn't exist
-mkdir -p "$ROOTFS_DIR"
+# Función para descargar archivos con reintentos
+download_with_retries() {
+  local url="$1"
+  local output="$2"
+  local retries=0
+  while [ $retries -lt $MAX_RETRIES ]; do
+    wget --tries=1 --timeout=$TIMEOUT --no-hsts -O "$output" "$url"
+    if [ $? -eq 0 ] && [ -s "$output" ]; then
+      return 0
+    fi
+    retries=$((retries + 1))
+    sleep 1
+  done
+  echo "Failed to download $url after $MAX_RETRIES attempts."
+  return 1
+}
 
-# Check if already installed
-if [ ! -e "$ROOTFS_DIR/.installed" ]; then
+# Verificar si ya está instalado
+if [ ! -e "$INSTALL_MARKER" ]; then
   echo "#######################################################################################"
   echo "#"
-  echo "#                                      Foxytoux * Prajwol"
+  echo "#                                      Foxytoux INSTALLER"
   echo "#"
   echo "#                           Copyright (C) 2024, RecodeStudios.Cloud"
   echo "#"
   echo "#"
   echo "#######################################################################################"
-  
-  # Prompt for Ubuntu installation
   read -p "Do you want to install Ubuntu? (YES/no): " install_ubuntu
 fi
 
-# Install Ubuntu if requested
-case $install_ubuntu in
+# Instalar Ubuntu si el usuario lo solicita
+case "$install_ubuntu" in
   [yY][eE][sS])
-    # Download and extract Ubuntu base tarball
-    curl -o /tmp/rootfs.tar.gz "http://cdimage.ubuntu.com/ubuntu-base/releases/20.04/release/ubuntu-base-20.04.4-base-${ARCH_ALT}.tar.gz"
-    tar -xf /tmp/rootfs.tar.gz -C "$ROOTFS_DIR"
-    
-    # Avoid permission issues by creating necessary directories
-    mkdir -p "$ROOTFS_DIR/var/lib/apt/lists/partial"
-    mkdir -p "$ROOTFS_DIR/tmp"
-    chmod 1777 "$ROOTFS_DIR/tmp"
+    UBUNTU_VERSION="20.04"
+    UBUNTU_URL="http://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_VERSION}/release/ubuntu-base-${UBUNTU_VERSION}-base-${ARCH_ALT}.tar.gz"
+    TMP_TAR="/tmp/rootfs.tar.gz"
+
+    echo "Downloading Ubuntu base system (${UBUNTU_VERSION}) for ${ARCH_ALT}..."
+    if ! download_with_retries "$UBUNTU_URL" "$TMP_TAR"; then
+      echo "Failed to download Ubuntu base system."
+      exit 1
+    fi
+
+    echo "Extracting root filesystem..."
+    tar -xf "$TMP_TAR" -C "$ROOTFS_DIR"
+    rm -f "$TMP_TAR"
     ;;
   *)
     echo "Skipping Ubuntu installation."
     ;;
 esac
 
-# Ensure necessary directories exist
-mkdir -p "$ROOTFS_DIR/usr/local/bin"
+# Configurar PRoot si no está instalado
+if [ ! -e "$INSTALL_MARKER" ]; then
+  mkdir -p "$ROOTFS_DIR/usr/local/bin"
+  PROOT_URL="https://raw.githubusercontent.com/foxytouxxx/freeroot/main/proot-${ARCH}"
+  PROOT_BIN="$ROOTFS_DIR/usr/local/bin/proot"
 
-# Download and set up proot
-curl -o "$ROOTFS_DIR/usr/local/bin/proot" "https://raw.githubusercontent.com/foxytouxxx/freeroot/main/proot-${ARCH}"
-chmod 755 "$ROOTFS_DIR/usr/local/bin/proot"
+  echo "Downloading PRoot binary for ${ARCH}..."
+  if ! download_with_retries "$PROOT_URL" "$PROOT_BIN"; then
+    echo "Failed to download PRoot binary."
+    exit 1
+  fi
 
-# Set up DNS resolution
-printf "nameserver 1.1.1.1\nnameserver 1.0.0.1" > "$ROOTFS_DIR/etc/resolv.conf"
+  chmod 755 "$PROOT_BIN"
+fi
 
-# Clean up temporary files
-rm -rf /tmp/rootfs.tar.gz
+# Configurar resolv.conf y marcar como instalado
+if [ ! -e "$INSTALL_MARKER" ]; then
+  echo "Configuring DNS settings..."
+  printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > "${ROOTFS_DIR}/etc/resolv.conf"
+  touch "$INSTALL_MARKER"
+fi
 
-# Mark as installed
-touch "$ROOTFS_DIR/.installed"
-
-# Color constants
-CYAN='\e[0;36m'
-WHITE='\e[0;37m'
-RESET_COLOR='\e[0m'
-
-# Display completion message
-display_gg() {
+# Función para mostrar mensaje de finalización
+display_completion_message() {
+  CYAN='\e[0;36m'
+  WHITE='\e[0;37m'
+  RESET_COLOR='\e[0m'
   echo -e "${WHITE}___________________________________________________${RESET_COLOR}"
   echo -e ""
-  echo -e "           ${CYAN}-----> Mission Completed ! <----${RESET_COLOR}"
+  echo -e "           ${CYAN}-----> Mission Completed! <----${RESET_COLOR}"
 }
 
-# Clear screen and display completion message
+# Limpiar pantalla y mostrar mensaje final
 clear
-display_gg
+display_completion_message
 
-# Start proot with fake root privileges
-"$ROOTFS_DIR/usr/local/bin/proot" \
-  --rootfs="$ROOTFS_DIR" \
-  -0 -w "/root" \
-  -b /dev \
-  -b /sys \
-  -b /proc \
-  -b /etc/resolv.conf \
-  --kill-on-exit \
-  /bin/bash -c "apt-get update && apt-get install -y --no-install-recommends bash coreutils && bash"
+# Ejecutar PRoot
+echo "Starting PRoot environment..."
+$ROOTFS_DIR/usr/local/bin/proot \
+  --rootfs="${ROOTFS_DIR}" \
+  -0 -w "/root" -b /dev -b /sys -b /proc -b /etc/resolv.conf --kill-on-exit
